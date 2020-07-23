@@ -38,6 +38,7 @@ type VSphere struct {
 	VMMetricExclude         []string `toml:"vm_metric_exclude"`
 	VMInclude               []string `toml:"vm_include"`
 	VMExclude               []string `toml:"vm_exclude"`
+	VMCustomMetricInclude   []string `toml:"vm_custom_metric_include"`
 	DatastoreInstances      bool
 	DatastoreMetricInclude  []string
 	DatastoreMetricExclude  []string
@@ -168,6 +169,10 @@ var sampleConfig = `
     "storageAdapter.write.average",
     "sys.uptime.latest",
   ]
+
+  # vm_custom_metric_include = [
+  #  "disk.filesystem.info",
+  # ]
     ## Collect IP addresses? Valid values are "ipv4" and "ipv6"
   # ip_addresses = ["ipv6", "ipv4" ]
 
@@ -350,6 +355,7 @@ func init() {
 			VMMetricInclude:         nil,
 			VMMetricExclude:         nil,
 			VMInclude:               []string{"/*/vm/**"},
+			VMCustomMetricInclude:   nil,
 			DatastoreInstances:      false,
 			DatastoreMetricInclude:  nil,
 			DatastoreMetricExclude:  nil,

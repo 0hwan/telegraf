@@ -61,6 +61,7 @@ type Endpoint struct {
 	customAttrEnabled bool
 	metricNameLookup  map[int32]string
 	metricNameMux     sync.RWMutex
+	customCounterInfo map[string]CustomPerfCounterInfo
 	log               telegraf.Logger
 }
 
@@ -79,8 +80,10 @@ type resourceKind struct {
 	collectInstances bool
 	getObjects       func(context.Context, *Endpoint, *ResourceFilter) (objectMap, error)
 	include          []string
+	customInclude    []string
 	simple           bool
 	metrics          performance.MetricList
+	customMetrics    []CustomPerfCounterInfo
 	parent           string
 	latestSample     time.Time
 	lastColl         time.Time
@@ -93,17 +96,24 @@ type metricEntry struct {
 	fields map[string]interface{}
 }
 
+type CustomPerfCounterInfo struct {
+	Name     string
+	Instance string
+	unit     string
+}
+
 type objectMap map[string]*objectRef
 
 type objectRef struct {
-	name         string
-	altID        string
-	ref          types.ManagedObjectReference
-	parentRef    *types.ManagedObjectReference //Pointer because it must be nillable
-	guest        string
-	dcname       string
-	customValues map[string]string
-	lookup       map[string]string
+	name          string
+	altID         string
+	ref           types.ManagedObjectReference
+	parentRef     *types.ManagedObjectReference //Pointer because it must be nillable
+	guest         string
+	dcname        string
+	customValues  map[string]string
+	lookup        map[string]string
+	guestDiskInfo []types.GuestDiskInfo
 }
 
 func (e *Endpoint) getParent(obj *objectRef, res *resourceKind) (*objectRef, bool) {
@@ -127,6 +137,7 @@ func NewEndpoint(ctx context.Context, parent *VSphere, url *url.URL, log telegra
 		clientFactory:     NewClientFactory(ctx, url, parent),
 		customAttrFilter:  newFilterOrPanic(parent.CustomAttributeInclude, parent.CustomAttributeExclude),
 		customAttrEnabled: anythingEnabled(parent.CustomAttributeExclude),
+		customCounterInfo: initCustomCounterInfo(ctx),
 		log:               log,
 	}
 
@@ -449,6 +460,8 @@ func (e *Endpoint) discover(ctx context.Context) error {
 				} else {
 					e.complexMetadataSelect(ctx, res, objects)
 				}
+				e.customMetadataSelect(ctx, client, res)
+
 				newObjects[k] = objects
 
 				SendInternalCounterWithTags("discovered_objects", e.URL.Host, map[string]string{"type": res.name}, int64(len(objects)))
@@ -497,6 +510,51 @@ func (e *Endpoint) discover(ctx context.Context) error {
 	sw.Stop()
 	SendInternalCounterWithTags("discovered_objects", e.URL.Host, map[string]string{"type": "instance-total"}, numRes)
 	return nil
+}
+
+func initCustomCounterInfo(ctx context.Context) map[string]CustomPerfCounterInfo {
+
+	infoMap := make(map[string]CustomPerfCounterInfo)
+
+	infoMap["disk.filesystem.info"] = CustomPerfCounterInfo{
+		Name: "disk.filesystem.info",
+		//Value: "disk.filesystem.info",
+		unit: "Bytes",
+	}
+	/*
+		infoMap["disk.filesystem.capacity"] = CustomPerfCounterInfo{
+			Name: "disk.filesystem.capacity",
+			//Value: "disk.filesystem.capacity",
+			unit: "Bytes",
+		}
+
+		infoMap["disk.filesystem.freespace"] = CustomPerfCounterInfo{
+			Name: "disk.filesystem.freespace",
+			//Value: "disk.filesystem.freespace",
+			unit: "Bytes",
+		}
+	*/
+	return infoMap
+}
+
+func (e *Endpoint) customMetadataSelect(ctx context.Context, client *Client, res *resourceKind) {
+	e.log.Debugf("Using fast metric metadata selection for %s", res.name)
+	m := e.customCounterInfo
+
+	res.customMetrics = make([]CustomPerfCounterInfo, 0, len(res.customInclude))
+	for _, s := range res.customInclude {
+		if pci, ok := m[s]; ok {
+			cnt := pci
+			if res.collectInstances {
+				cnt.Instance = "*"
+			} else {
+				cnt.Instance = ""
+			}
+			res.customMetrics = append(res.customMetrics, cnt)
+		} else {
+			e.log.Warnf("Metric name %s is unknown. Will not be collected", s)
+		}
+	}
 }
 
 func (e *Endpoint) simpleMetadataSelect(ctx context.Context, client *Client, res *resourceKind) {
@@ -745,13 +803,14 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 			}
 		}
 		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
-			name:         r.Name,
-			ref:          r.ExtensibleManagedObject.Reference(),
-			parentRef:    r.Runtime.Host,
-			guest:        guest,
-			altID:        uuid,
-			customValues: e.loadCustomAttributes(&r.ManagedEntity),
-			lookup:       lookup,
+			name:          r.Name,
+			ref:           r.ExtensibleManagedObject.Reference(),
+			parentRef:     r.Runtime.Host,
+			guest:         guest,
+			altID:         uuid,
+			customValues:  e.loadCustomAttributes(&r.ManagedEntity),
+			lookup:        lookup,
+			guestDiskInfo: r.Guest.Disk,
 		}
 	}
 	return m, nil
@@ -1173,6 +1232,46 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 			acc.AddFields(bucket.name, bucket.fields, bucket.tags, bucket.ts)
 		}
 	}
+
+	// disk.filesystem.info
+	if resourceType == "vm" {
+		buckets := make(map[string]metricEntry)
+		for _, m := range res.customMetrics {
+			for k, v := range res.objects {
+				mn, _ := e.makeMetricIdentifier(prefix, m.Name)
+				ts := latestSample
+				for _, info := range v.guestDiskInfo {
+					moid := k
+					t := map[string]string{
+						"vcenter": e.URL.Host,
+						"source":  v.name,
+						"moid":    moid,
+					}
+
+					tmpMS := performance.MetricSeries{
+						Name:     m.Name,
+						Instance: info.DiskPath,
+					}
+
+					//tmpMS.Instance = info.DiskPath
+					e.populateTags(v, resourceType, res, t, &tmpMS)
+
+					bKey := mn + " " + info.DiskPath + " " + strconv.FormatInt(ts.UnixNano(), 10)
+					bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
+					//bucket.tags["disk"] = info.DiskPath
+					//bucket.fields["DiskPath"] = info.DiskPath
+					bucket.fields["Capacity"] = int64(info.Capacity)
+					bucket.fields["FreeSpace"] = int64(info.FreeSpace)
+
+					buckets[bKey] = bucket
+				}
+			}
+		}
+		for _, bucket := range buckets {
+			acc.AddFields(bucket.name, bucket.fields, bucket.tags, bucket.ts)
+		}
+	}
+
 	return count, latestSample, nil
 }
 
