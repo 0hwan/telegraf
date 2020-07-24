@@ -210,6 +210,7 @@ func NewEndpoint(ctx context.Context, parent *VSphere, url *url.URL, log telegra
 			excludePaths:     parent.VMExclude,
 			simple:           isSimple(parent.VMMetricInclude, parent.VMMetricExclude),
 			include:          parent.VMMetricInclude,
+			customInclude:    parent.VMCustomMetricInclude,
 			collectInstances: parent.VMInstances,
 			getObjects:       getVMs,
 			parent:           "host",
@@ -519,7 +520,7 @@ func initCustomCounterInfo(ctx context.Context) map[string]CustomPerfCounterInfo
 	infoMap["disk.filesystem.info"] = CustomPerfCounterInfo{
 		Name: "disk.filesystem.info",
 		//Value: "disk.filesystem.info",
-		unit: "Bytes",
+		unit: "kiloBytes",
 	}
 	/*
 		infoMap["disk.filesystem.capacity"] = CustomPerfCounterInfo{
@@ -1127,6 +1128,14 @@ func (e *Endpoint) alignSamples(info []types.PerfSampleInfo, values []int64, int
 	return rInfo, rValues
 }
 
+const (
+	BYTE     = 1.0
+	KILOBYTE = 1024 * BYTE
+	MEGABYTE = 1024 * KILOBYTE
+	GIGABYTE = 1024 * MEGABYTE
+	TERABYTE = 1024 * GIGABYTE
+)
+
 func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resourceKind, acc telegraf.Accumulator, now time.Time, interval time.Duration) (int, time.Time, error) {
 	e.log.Debugf("Query for %s has %d QuerySpecs", res.name, len(pqs))
 	latestSample := time.Time{}
@@ -1260,8 +1269,8 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 					bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
 					//bucket.tags["disk"] = info.DiskPath
 					//bucket.fields["DiskPath"] = info.DiskPath
-					bucket.fields["Capacity"] = int64(info.Capacity)
-					bucket.fields["FreeSpace"] = int64(info.FreeSpace)
+					bucket.fields["size"] = float64(int64(info.Capacity) / KILOBYTE)
+					bucket.fields["avail"] = float64(int64(info.FreeSpace) / KILOBYTE)
 
 					buckets[bKey] = bucket
 				}
