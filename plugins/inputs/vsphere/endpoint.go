@@ -518,7 +518,8 @@ func initCustomCounterInfo(ctx context.Context) map[string]CustomPerfCounterInfo
 	infoMap := make(map[string]CustomPerfCounterInfo)
 
 	infoMap["disk.filesystem.info"] = CustomPerfCounterInfo{
-		Name: "disk.filesystem.info",
+		Name:     "disk.filesystem.info",
+		Instance: "guest.df",
 		//Value: "disk.filesystem.info",
 		unit: "kiloBytes",
 	}
@@ -1259,7 +1260,8 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 
 					tmpMS := performance.MetricSeries{
 						Name:     m.Name,
-						Instance: info.DiskPath,
+						Instance: m.Instance,
+						//Instance: info.DiskPath,
 					}
 
 					//tmpMS.Instance = info.DiskPath
@@ -1269,6 +1271,7 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 					bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
 					//bucket.tags["disk"] = info.DiskPath
 					//bucket.fields["DiskPath"] = info.DiskPath
+					bucket.fields["filesystem"] = info.DiskPath
 					bucket.fields["size"] = float64(int64(info.Capacity) / KILOBYTE)
 					bucket.fields["avail"] = float64(int64(info.FreeSpace) / KILOBYTE)
 
