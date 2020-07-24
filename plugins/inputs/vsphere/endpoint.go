@@ -547,11 +547,12 @@ func (e *Endpoint) customMetadataSelect(ctx context.Context, client *Client, res
 	for _, s := range res.customInclude {
 		if pci, ok := m[s]; ok {
 			cnt := pci
-			if res.collectInstances {
-				cnt.Instance = "*"
-			} else {
-				cnt.Instance = ""
-			}
+			cnt.Instance = pci.Instance
+			//if res.collectInstances {
+			//	cnt.Instance = "*"
+			//} else {
+			//	cnt.Instance = ""
+			//}
 			res.customMetrics = append(res.customMetrics, cnt)
 		} else {
 			e.log.Warnf("Metric name %s is unknown. Will not be collected", s)
