@@ -114,6 +114,7 @@ type objectRef struct {
 	customValues  map[string]string
 	lookup        map[string]string
 	guestDiskInfo []types.GuestDiskInfo
+	guestNicInfo  []types.GuestNicInfo
 }
 
 func (e *Endpoint) getParent(obj *objectRef, res *resourceKind) (*objectRef, bool) {
@@ -814,6 +815,7 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 			customValues:  e.loadCustomAttributes(&r.ManagedEntity),
 			lookup:        lookup,
 			guestDiskInfo: r.Guest.Disk,
+			guestNicInfo:  r.Guest.Net,
 		}
 	}
 	return m, nil
@@ -1260,7 +1262,8 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 					}
 
 					tmpMS := performance.MetricSeries{
-						Name:     m.Name,
+						Name: m.Name,
+						//Instance: info.DiskPath,
 						Instance: m.Instance,
 						//Instance: info.DiskPath,
 					}
@@ -1348,6 +1351,19 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 			}
 			if ip, ok := objectRef.lookup[key+"ipv4"]; ok {
 				t["ipv4"] = ip
+			}
+		}
+		if resourceType == "vm" && objectRef.lookup != nil && objectRef.guestNicInfo != nil {
+			//e.log.Debugf("... %d", len(objectRef.guestNicInfo))
+			for _, nicInfo := range objectRef.guestNicInfo {
+				if fmt.Sprint(nicInfo.DeviceConfigId) == v.Instance {
+					for _, ipInfo := range nicInfo.IpConfig.IpAddress {
+						if ipInfo.PrefixLength == 24 && ipInfo.State == "preferred" {
+							t["mac_address"] = nicInfo.MacAddress
+							t["ipv4"] = ipInfo.IpAddress
+						}
+					}
+				}
 			}
 		}
 	} else if strings.HasPrefix(name, "storageAdapter.") {
