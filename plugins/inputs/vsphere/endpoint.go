@@ -1358,7 +1358,7 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 			for _, nicInfo := range objectRef.guestNicInfo {
 				if fmt.Sprint(nicInfo.DeviceConfigId) == v.Instance {
 					for _, ipInfo := range nicInfo.IpConfig.IpAddress {
-						if ipInfo.PrefixLength == 24 && ipInfo.State == "preferred" {
+						if isIPv4.MatchString(ipInfo.IpAddress) && ipInfo.State == "preferred" {
 							t["mac_address"] = nicInfo.MacAddress
 							t["ipv4"] = ipInfo.IpAddress
 						}
