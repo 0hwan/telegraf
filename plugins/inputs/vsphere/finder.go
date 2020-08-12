@@ -256,10 +256,10 @@ func init() {
 	}
 
 	addFields = map[string][]string{
-		"HostSystem": {"parent", "summary.customValue", "customValue"},
+		"HostSystem": {"parent", "hardware", "network", "configManager", "datastore", "summary.customValue", "customValue"},
 		"VirtualMachine": {"runtime.host", "config.guestId", "config.uuid", "runtime.powerState",
-			"summary.customValue", "guest.net", "guest.hostName", "guest.disk", "customValue"},
-		"Datastore":              {"parent", "info", "customValue"},
+			"summary.customValue", "guest.net", "guest.hostName", "guest.disk", "customValue", "summary"},
+		"Datastore":              {"parent", "info", "customValue", "host", "summary"},
 		"ClusterComputeResource": {"parent", "customValue"},
 		"Datacenter":             {"parent", "customValue"},
 	}

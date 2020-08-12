@@ -31,6 +31,7 @@ type VSphere struct {
 	HostInstances           bool
 	HostMetricInclude       []string
 	HostMetricExclude       []string
+	HostCustomMetricInclude []string `toml:"host_custom_metric_include"`
 	HostInclude             []string
 	HostExclude             []string
 	VMInstances             bool     `toml:"vm_instances"`

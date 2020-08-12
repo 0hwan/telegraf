@@ -99,6 +99,7 @@ type metricEntry struct {
 type CustomPerfCounterInfo struct {
 	Name     string
 	Instance string
+	Type     string
 	unit     string
 }
 
@@ -115,6 +116,15 @@ type objectRef struct {
 	lookup        map[string]string
 	guestDiskInfo []types.GuestDiskInfo
 	guestNicInfo  []types.GuestNicInfo
+	memorySizeMB  int32
+	dsCapacity    int32
+	dsFreeSpace   int32
+	dsHosts       map[string]bool
+	datasources   []string
+
+	//hostSummary     types.HostListSummary
+	//vmSummary       types.VirtualMachineSummary
+	//dsSummery       types.DatastoreSummary
 }
 
 func (e *Endpoint) getParent(obj *objectRef, res *resourceKind) (*objectRef, bool) {
@@ -193,6 +203,7 @@ func NewEndpoint(ctx context.Context, parent *VSphere, url *url.URL, log telegra
 			excludePaths:     parent.HostExclude,
 			simple:           isSimple(parent.HostMetricInclude, parent.HostMetricExclude),
 			include:          parent.HostMetricInclude,
+			customInclude:    parent.HostCustomMetricInclude,
 			collectInstances: parent.HostInstances,
 			getObjects:       getHosts,
 			parent:           "cluster",
@@ -518,12 +529,20 @@ func initCustomCounterInfo(ctx context.Context) map[string]CustomPerfCounterInfo
 
 	infoMap := make(map[string]CustomPerfCounterInfo)
 
-	infoMap["disk.filesystem.info"] = CustomPerfCounterInfo{
+	infoMap["vm.disk.filesystem.info"] = CustomPerfCounterInfo{
 		Name:     "disk.filesystem.info",
 		Instance: "guest.df",
-		//Value: "disk.filesystem.info",
-		unit: "kiloBytes",
+		Type:     "vm",
+		unit:     "kiloBytes",
 	}
+
+	infoMap["host.disk.used.capacity"] = CustomPerfCounterInfo{
+		Name:     "disk.used.capacity",
+		Instance: "",
+		Type:     "host",
+		unit:     "kiloBytes",
+	}
+
 	/*
 		infoMap["disk.filesystem.capacity"] = CustomPerfCounterInfo{
 			Name: "disk.filesystem.capacity",
@@ -546,7 +565,7 @@ func (e *Endpoint) customMetadataSelect(ctx context.Context, client *Client, res
 
 	res.customMetrics = make([]CustomPerfCounterInfo, 0, len(res.customInclude))
 	for _, s := range res.customInclude {
-		if pci, ok := m[s]; ok {
+		if pci, ok := m[res.name+"."+s]; ok {
 			cnt := pci
 			cnt.Instance = pci.Instance
 			//if res.collectInstances {
@@ -719,11 +738,19 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 	}
 	m := make(objectMap)
 	for _, r := range resources {
+
+		dsList := make([]string, 0)
+		for _, ds := range r.Datastore {
+			dsList = append(dsList, ds.Value)
+		}
 		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
 			name:         r.Name,
 			ref:          r.ExtensibleManagedObject.Reference(),
 			parentRef:    r.Parent,
 			customValues: e.loadCustomAttributes(&r.ManagedEntity),
+			memorySizeMB: int32(r.Hardware.MemorySize / MEGABYTE),
+			datasources:  dsList,
+			//hostSummary:  r.Summary,
 		}
 	}
 	return m, nil
@@ -816,6 +843,8 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 			lookup:        lookup,
 			guestDiskInfo: r.Guest.Disk,
 			guestNicInfo:  r.Guest.Net,
+			memorySizeMB:  r.Summary.Config.MemorySizeMB,
+			//vmSummary:     r.Summary,
 		}
 	}
 	return m, nil
@@ -838,12 +867,22 @@ func getDatastores(ctx context.Context, e *Endpoint, filter *ResourceFilter) (ob
 				lunId = info.Url
 			}
 		}
+
+		hosts := make(map[string]bool)
+		for _, host := range r.Host {
+			hosts[host.Key.Value] = true
+		}
 		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
 			name:         r.Name,
 			ref:          r.ExtensibleManagedObject.Reference(),
 			parentRef:    r.Parent,
 			altID:        lunId,
 			customValues: e.loadCustomAttributes(&r.ManagedEntity),
+			dsCapacity:   int32(r.Summary.Capacity / MEGABYTE),
+			dsFreeSpace:  int32(r.Summary.FreeSpace / MEGABYTE),
+			dsHosts:      hosts,
+			//dsHosts:
+			//dsSummery:    r.Summary,
 		}
 	}
 	return m, nil
@@ -1250,36 +1289,79 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 	if resourceType == "vm" {
 		buckets := make(map[string]metricEntry)
 		for _, m := range res.customMetrics {
-			for k, v := range res.objects {
-				mn, _ := e.makeMetricIdentifier(prefix, m.Name)
-				ts := latestSample
-				for _, info := range v.guestDiskInfo {
-					moid := k
-					t := map[string]string{
-						"vcenter": e.URL.Host,
-						"source":  v.name,
-						"moid":    moid,
+			if m.Name == "disk.filesystem.info" {
+				for k, v := range res.objects {
+					mn, _ := e.makeMetricIdentifier(prefix, m.Name)
+					ts := latestSample
+					for _, info := range v.guestDiskInfo {
+						moid := k
+						t := map[string]string{
+							"vcenter": e.URL.Host,
+							"source":  v.name,
+							"moid":    moid,
+						}
+
+						tmpMS := performance.MetricSeries{
+							Name:     m.Name,
+							Instance: info.DiskPath,
+							//Instance: m.Instance,
+						}
+
+						//tmpMS.Instance = info.DiskPath
+						e.populateTags(v, resourceType, res, t, &tmpMS)
+
+						bKey := mn + " " + info.DiskPath + " " + strconv.FormatInt(ts.UnixNano(), 10)
+						bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
+						//bucket.tags["disk"] = info.DiskPath
+						//bucket.fields["DiskPath"] = info.DiskPath
+						//bucket.fields["filesystem"] = info.DiskPath
+						bucket.fields["capacity_kb"] = float64(int64(info.Capacity) / KILOBYTE)
+						bucket.fields["free_kb"] = float64(int64(info.FreeSpace) / KILOBYTE)
+
+						buckets[bKey] = bucket
 					}
+				}
+			}
+		}
+		for _, bucket := range buckets {
+			acc.AddFields(bucket.name, bucket.fields, bucket.tags, bucket.ts)
+		}
+	} else if resourceType == "host" {
+		buckets := make(map[string]metricEntry)
+		for _, m := range res.customMetrics {
+			if m.Name == "disk.used.capacity" {
+				resDs, _ := e.resourceKinds["datastore"]
+				//e.log.Debugf("DataStore [%s]", tmp.objects["datastore-1029"])
+				for k, v := range res.objects {
+					mn, _ := e.makeMetricIdentifier(prefix, m.Name)
+					ts := latestSample
+					for _, dsName := range v.datasources {
+						//e.log.Debugf("aaaa [%s] [%s] [%s] [%s]", resDs.objects[dsName].altID, mn, k, v)
+						moid := k
+						t := map[string]string{
+							"vcenter": e.URL.Host,
+							"source":  v.name,
+							"moid":    moid,
+						}
 
-					tmpMS := performance.MetricSeries{
-						Name: m.Name,
-						//Instance: info.DiskPath,
-						Instance: m.Instance,
-						//Instance: info.DiskPath,
+						tmpMS := performance.MetricSeries{
+							Name: m.Name,
+							//Instance: resDs.objects[dsName].altID,
+							Instance: dsName,
+						}
+						//
+						////tmpMS.Instance = info.DiskPath
+						e.populateTags(v, resourceType, res, t, &tmpMS)
+
+						bKey := mn + " " + dsName + " " + strconv.FormatInt(ts.UnixNano(), 10)
+						bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
+						////bucket.tags["disk"] = info.DiskPath
+						////bucket.fields["DiskPath"] = info.DiskPath
+						////bucket.fields["filesystem"] = info.DiskPath
+						bucket.fields["capacity_mb"] = resDs.objects[dsName].dsCapacity
+						bucket.fields["free_mb"] = resDs.objects[dsName].dsFreeSpace
+						buckets[bKey] = bucket
 					}
-
-					//tmpMS.Instance = info.DiskPath
-					e.populateTags(v, resourceType, res, t, &tmpMS)
-
-					bKey := mn + " " + info.DiskPath + " " + strconv.FormatInt(ts.UnixNano(), 10)
-					bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
-					//bucket.tags["disk"] = info.DiskPath
-					//bucket.fields["DiskPath"] = info.DiskPath
-					bucket.fields["filesystem"] = info.DiskPath
-					bucket.fields["size"] = float64(int64(info.Capacity) / KILOBYTE)
-					bucket.fields["avail"] = float64(int64(info.FreeSpace) / KILOBYTE)
-
-					buckets[bKey] = bucket
 				}
 			}
 		}
@@ -1300,6 +1382,18 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 	if resourceType == "vm" && objectRef.altID != "" {
 		t["uuid"] = objectRef.altID
 	}
+
+	if resourceType == "vm" || resourceType == "host" {
+		t["memory_size_mb"] = fmt.Sprintf("%d", objectRef.memorySizeMB)
+	}
+
+	//if resourceType == "vm" && objectRef.vmSummary.Config.Name != "" {
+	//	t["memory_size_mb"] = fmt.Sprintf("%d", objectRef.vmSummary.Config.MemorySizeMB)
+	//}
+	//
+	//if resourceType == "host" && objectRef.hostSummary.Config.Name != "" {
+	//	t["memory_size_mb"] = fmt.Sprintf("%d", objectRef.hostSummary.Hardware.MemorySize / MEGABYTE)
+	//}
 
 	// Map parent reference
 	parent, found := e.getParent(objectRef, resource)
@@ -1361,6 +1455,7 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 						if isIPv4.MatchString(ipInfo.IpAddress) && ipInfo.State == "preferred" {
 							t["mac_address"] = nicInfo.MacAddress
 							t["ipv4"] = ipInfo.IpAddress
+							t["network"] = nicInfo.Network
 						}
 					}
 				}
