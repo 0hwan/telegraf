@@ -116,6 +116,7 @@ type objectRef struct {
 	lookup        map[string]string
 	guestDiskInfo []types.GuestDiskInfo
 	guestNicInfo  []types.GuestNicInfo
+	hostNicInfo   hostNicInfo //types.HostVirtualNicSpec
 	memorySizeMB  int32
 	dsCapacity    int32
 	dsFreeSpace   int32
@@ -125,6 +126,13 @@ type objectRef struct {
 	//hostSummary     types.HostListSummary
 	//vmSummary       types.VirtualMachineSummary
 	//dsSummery       types.DatastoreSummary
+}
+
+type hostNicInfo struct {
+	pnicName string
+	vnicName string
+	ipv4     string
+	mac      string
 }
 
 func (e *Endpoint) getParent(obj *objectRef, res *resourceKind) (*objectRef, bool) {
@@ -743,6 +751,27 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 		for _, ds := range r.Datastore {
 			dsList = append(dsList, ds.Value)
 		}
+
+		tmpHostNicInfo := hostNicInfo{} //make(hostNicInfo)
+		for _, netConfig := range r.Config.VirtualNicManagerInfo.NetConfig {
+			if netConfig.NicType == "management" && netConfig.SelectedVnic != nil {
+				for _, k := range netConfig.SelectedVnic {
+					for _, nicSpec := range netConfig.CandidateVnic {
+						if nicSpec.Key == k {
+							tmpHostNicInfo.ipv4 = nicSpec.Spec.Ip.IpAddress
+							tmpHostNicInfo.mac = nicSpec.Spec.Mac
+							tmpHostNicInfo.vnicName = nicSpec.Device
+						}
+					}
+				}
+			}
+		}
+		for _, pnic := range r.Config.Network.Pnic {
+			if pnic.Mac == tmpHostNicInfo.mac {
+				tmpHostNicInfo.pnicName = pnic.Device
+				break
+			}
+		}
 		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
 			name:         r.Name,
 			ref:          r.ExtensibleManagedObject.Reference(),
@@ -750,6 +779,7 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 			customValues: e.loadCustomAttributes(&r.ManagedEntity),
 			memorySizeMB: int32(r.Hardware.MemorySize / MEGABYTE),
 			datasources:  dsList,
+			hostNicInfo:  tmpHostNicInfo,
 			//hostSummary:  r.Summary,
 		}
 	}
@@ -843,7 +873,7 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 			lookup:        lookup,
 			guestDiskInfo: r.Guest.Disk,
 			guestNicInfo:  r.Guest.Net,
-			memorySizeMB:  r.Summary.Config.MemorySizeMB,
+			memorySizeMB:  r.Config.Hardware.MemoryMB,
 			//vmSummary:     r.Summary,
 		}
 	}
@@ -1460,6 +1490,10 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 					}
 				}
 			}
+		}
+		if resourceType == "host" && objectRef.hostNicInfo.pnicName == instance {
+			t["ipv4"] = objectRef.hostNicInfo.ipv4
+			t["mac_address"] = objectRef.hostNicInfo.mac
 		}
 	} else if strings.HasPrefix(name, "storageAdapter.") {
 		t["adapter"] = instance
