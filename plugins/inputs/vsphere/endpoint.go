@@ -1388,9 +1388,11 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 						////bucket.tags["disk"] = info.DiskPath
 						////bucket.fields["DiskPath"] = info.DiskPath
 						////bucket.fields["filesystem"] = info.DiskPath
-						bucket.fields["capacity_mb"] = resDs.objects[dsName].dsCapacity
-						bucket.fields["free_mb"] = resDs.objects[dsName].dsFreeSpace
-						buckets[bKey] = bucket
+						if resDs.objects[dsName] != nil {
+							bucket.fields["capacity_mb"] = resDs.objects[dsName].dsCapacity
+							bucket.fields["free_mb"] = resDs.objects[dsName].dsFreeSpace
+							buckets[bKey] = bucket
+						}
 					}
 				}
 			}
