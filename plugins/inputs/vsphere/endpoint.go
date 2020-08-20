@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -122,6 +123,7 @@ type objectRef struct {
 	dsFreeSpace   int32
 	dsHosts       map[string]bool
 	datasources   []string
+	virtualDisk   []*types.VirtualDisk
 
 	//hostSummary     types.HostListSummary
 	//vmSummary       types.VirtualMachineSummary
@@ -863,6 +865,14 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 				}
 			}
 		}
+
+		var vDisks []*types.VirtualDisk
+		for _, device := range r.Config.Hardware.Device {
+			if reflect.TypeOf(device).String() == "*types.VirtualDisk" {
+				vDisks = append(vDisks, device.(*types.VirtualDisk))
+			}
+		}
+
 		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
 			name:          r.Name,
 			ref:           r.ExtensibleManagedObject.Reference(),
@@ -874,6 +884,7 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 			guestDiskInfo: r.Guest.Disk,
 			guestNicInfo:  r.Guest.Net,
 			memorySizeMB:  r.Config.Hardware.MemoryMB,
+			virtualDisk:   vDisks,
 			//vmSummary:     r.Summary,
 		}
 	}
@@ -1507,6 +1518,19 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 		t["module"] = instance
 	} else if strings.HasPrefix(name, "virtualDisk.") {
 		t["disk"] = instance
+		unit := strings.Split(instance, ":")
+		if instance != "instance-total" && len(unit) == 2 {
+			unitNumber, err := strconv.Atoi(unit[1])
+			if err == nil {
+				for _, vDisk := range objectRef.virtualDisk {
+					if *vDisk.UnitNumber == int32(unitNumber) {
+						t["capacity_kb"] = strconv.FormatInt(vDisk.CapacityInKB, 10)
+						t["disk_uuid"] = vDisk.VirtualDevice.Backing.(*types.VirtualDiskFlatVer2BackingInfo).Uuid
+					}
+				}
+			}
+		}
+
 	} else if v.Instance != "" {
 		// default
 		t["instance"] = v.Instance
