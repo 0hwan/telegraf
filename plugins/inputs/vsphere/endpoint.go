@@ -124,6 +124,7 @@ type objectRef struct {
 	dsHosts       map[string]bool
 	datasources   []string
 	virtualDisk   []*types.VirtualDisk
+	hostScsiDisk  []*types.HostScsiDisk
 
 	//hostSummary     types.HostListSummary
 	//vmSummary       types.VirtualMachineSummary
@@ -539,9 +540,9 @@ func initCustomCounterInfo(ctx context.Context) map[string]CustomPerfCounterInfo
 
 	infoMap := make(map[string]CustomPerfCounterInfo)
 
-	infoMap["vm.disk.filesystem.info"] = CustomPerfCounterInfo{
-		Name:     "disk.filesystem.info",
-		Instance: "guest.df",
+	infoMap["vm.guestDisk.usage.average"] = CustomPerfCounterInfo{
+		Name:     "guestDisk.usage.average",
+		Instance: "",
 		Type:     "vm",
 		unit:     "kiloBytes",
 	}
@@ -774,6 +775,16 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 				break
 			}
 		}
+
+		// r.Config.ScsiLun
+		// types.HostScsiDisk
+		var hostScsiDisk []*types.HostScsiDisk
+		for _, device := range r.Config.StorageDevice.ScsiLun {
+			if reflect.TypeOf(device).String() == "*types.HostScsiDisk" {
+				hostScsiDisk = append(hostScsiDisk, device.(*types.HostScsiDisk))
+			}
+		}
+
 		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
 			name:         r.Name,
 			ref:          r.ExtensibleManagedObject.Reference(),
@@ -782,6 +793,7 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 			memorySizeMB: int32(r.Hardware.MemorySize / MEGABYTE),
 			datasources:  dsList,
 			hostNicInfo:  tmpHostNicInfo,
+			hostScsiDisk: hostScsiDisk,
 			//hostSummary:  r.Summary,
 		}
 	}
@@ -1330,7 +1342,7 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 	if resourceType == "vm" {
 		buckets := make(map[string]metricEntry)
 		for _, m := range res.customMetrics {
-			if m.Name == "disk.filesystem.info" {
+			if m.Name == "guestDisk.usage.average" {
 				for k, v := range res.objects {
 					mn, _ := e.makeMetricIdentifier(prefix, m.Name)
 					ts := latestSample
@@ -1477,6 +1489,16 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 		}
 	} else if strings.HasPrefix(name, "disk.") {
 		t["disk"] = cleanDiskTag(instance)
+
+		if instance != "instance-total" {
+			for _, hostDisk := range objectRef.hostScsiDisk {
+				if instance == hostDisk.CanonicalName {
+					capacity := hostDisk.Capacity.Block * int64(hostDisk.Capacity.BlockSize) / KILOBYTE
+					t["capacity_kb"] = strconv.FormatInt(capacity, 10)
+					t["disk_uuid"] = hostDisk.Uuid
+				}
+			}
+		}
 	} else if strings.HasPrefix(name, "net.") {
 		t["interface"] = instance
 
