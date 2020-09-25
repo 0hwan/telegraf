@@ -15,41 +15,42 @@ import (
 // VSphere is the top level type for the vSphere input plugin. It contains all the configuration
 // and a list of connected vSphere endpoints
 type VSphere struct {
-	Vcenters                []string
-	Username                string
-	Password                string
-	DatacenterInstances     bool
-	DatacenterMetricInclude []string
-	DatacenterMetricExclude []string
-	DatacenterInclude       []string
-	DatacenterExclude       []string
-	ClusterInstances        bool
-	ClusterMetricInclude    []string
-	ClusterMetricExclude    []string
-	ClusterInclude          []string
-	ClusterExclude          []string
-	HostInstances           bool
-	HostMetricInclude       []string
-	HostMetricExclude       []string
-	HostCustomMetricInclude []string `toml:"host_custom_metric_include"`
-	HostInclude             []string
-	HostExclude             []string
-	VMInstances             bool     `toml:"vm_instances"`
-	VMMetricInclude         []string `toml:"vm_metric_include"`
-	VMMetricExclude         []string `toml:"vm_metric_exclude"`
-	VMInclude               []string `toml:"vm_include"`
-	VMExclude               []string `toml:"vm_exclude"`
-	VMCustomMetricInclude   []string `toml:"vm_custom_metric_include"`
-	DatastoreInstances      bool
-	DatastoreMetricInclude  []string
-	DatastoreMetricExclude  []string
-	DatastoreInclude        []string
-	DatastoreExclude        []string
-	Separator               string
-	CustomAttributeInclude  []string
-	CustomAttributeExclude  []string
-	UseIntSamples           bool
-	IpAddresses             []string
+	Vcenters                   []string
+	Username                   string
+	Password                   string
+	DatacenterInstances        bool
+	DatacenterMetricInclude    []string
+	DatacenterMetricExclude    []string
+	DatacenterInclude          []string
+	DatacenterExclude          []string
+	ClusterInstances           bool
+	ClusterMetricInclude       []string
+	ClusterCustomMetricInclude []string `toml:"cluster_custom_metric_include"`
+	ClusterMetricExclude       []string
+	ClusterInclude             []string
+	ClusterExclude             []string
+	HostInstances              bool
+	HostMetricInclude          []string
+	HostMetricExclude          []string
+	HostCustomMetricInclude    []string `toml:"host_custom_metric_include"`
+	HostInclude                []string
+	HostExclude                []string
+	VMInstances                bool     `toml:"vm_instances"`
+	VMMetricInclude            []string `toml:"vm_metric_include"`
+	VMMetricExclude            []string `toml:"vm_metric_exclude"`
+	VMInclude                  []string `toml:"vm_include"`
+	VMExclude                  []string `toml:"vm_exclude"`
+	VMCustomMetricInclude      []string `toml:"vm_custom_metric_include"`
+	DatastoreInstances         bool
+	DatastoreMetricInclude     []string
+	DatastoreMetricExclude     []string
+	DatastoreInclude           []string
+	DatastoreExclude           []string
+	Separator                  string
+	CustomAttributeInclude     []string
+	CustomAttributeExclude     []string
+	UseIntSamples              bool
+	IpAddresses                []string
 
 	MaxQueryObjects         int
 	MaxQueryMetrics         int

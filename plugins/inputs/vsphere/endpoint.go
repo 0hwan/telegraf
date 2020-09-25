@@ -118,9 +118,14 @@ type objectRef struct {
 	guestDiskInfo []types.GuestDiskInfo
 	guestNicInfo  []types.GuestNicInfo
 	hostNicInfo   hostNicInfo //types.HostVirtualNicSpec
-	memorySizeMB  int32
+	cpuMhz        int32
+	memoryMB      int32
+	usedCpuMhz    int32
+	usedMemoryMB  int32
 	dsCapacity    int32
 	dsFreeSpace   int32
+	hostCount     int32
+	vmCount       int32
 	dsHosts       map[string]bool
 	datasources   []string
 	virtualDisk   []*types.VirtualDisk
@@ -196,6 +201,7 @@ func NewEndpoint(ctx context.Context, parent *VSphere, url *url.URL, log telegra
 			excludePaths:     parent.ClusterExclude,
 			simple:           isSimple(parent.ClusterMetricInclude, parent.ClusterMetricExclude),
 			include:          parent.ClusterMetricInclude,
+			customInclude:    parent.ClusterCustomMetricInclude,
 			collectInstances: parent.ClusterInstances,
 			getObjects:       getClusters,
 			parent:           "datacenter",
@@ -554,6 +560,13 @@ func initCustomCounterInfo(ctx context.Context) map[string]CustomPerfCounterInfo
 		unit:     "kiloBytes",
 	}
 
+	infoMap["cluster.instance.used.summary"] = CustomPerfCounterInfo{
+		Name:     "instance.used.summary",
+		Instance: "",
+		Type:     "cluster",
+		unit:     "megaBytes",
+	}
+
 	/*
 		infoMap["disk.filesystem.capacity"] = CustomPerfCounterInfo{
 			Name: "disk.filesystem.capacity",
@@ -736,6 +749,28 @@ func getClusters(ctx context.Context, e *Endpoint, filter *ResourceFilter) (obje
 		if err != nil {
 			return nil, err
 		}
+
+		//e.Parent.Log.Warnf("DDDDBUGGER")
+
+		dsList := make([]string, 0)
+		for _, ds := range r.Datastore {
+			dsList = append(dsList, ds.Value)
+		}
+		//computeResource := r.ComputeResource.Summary.GetComputeResourceSummary()
+		//computeResource := r.Summary.GetComputeResourceSummary()
+		summary := r.ComputeResource.Summary.(*types.ClusterComputeResourceSummary)
+
+		m[r.ExtensibleManagedObject.Reference().Value] = &objectRef{
+			name:        r.Name,
+			altID:       "",
+			ref:         r.ExtensibleManagedObject.Reference(),
+			parentRef:   r.Parent,
+			cpuMhz:      summary.TotalCpu,
+			memoryMB:    int32(summary.TotalMemory / MEGABYTE),
+			hostCount:   summary.NumHosts,
+			vmCount:     summary.UsageSummary.TotalVmCount,
+			datasources: dsList,
+		}
 	}
 	return m, nil
 }
@@ -790,11 +825,12 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 			ref:          r.ExtensibleManagedObject.Reference(),
 			parentRef:    r.Parent,
 			customValues: e.loadCustomAttributes(&r.ManagedEntity),
-			memorySizeMB: int32(r.Hardware.MemorySize / MEGABYTE),
+			memoryMB:     int32(r.Hardware.MemorySize / MEGABYTE),
+			usedCpuMhz:   r.Summary.QuickStats.OverallCpuUsage,
+			usedMemoryMB: r.Summary.QuickStats.OverallMemoryUsage,
 			datasources:  dsList,
 			hostNicInfo:  tmpHostNicInfo,
 			hostScsiDisk: hostScsiDisk,
-			//hostSummary:  r.Summary,
 		}
 	}
 	return m, nil
@@ -895,7 +931,7 @@ func getVMs(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectMap
 			lookup:        lookup,
 			guestDiskInfo: r.Guest.Disk,
 			guestNicInfo:  r.Guest.Net,
-			memorySizeMB:  r.Config.Hardware.MemoryMB,
+			memoryMB:      r.Config.Hardware.MemoryMB,
 			virtualDisk:   vDisks,
 			//vmSummary:     r.Summary,
 		}
@@ -934,8 +970,6 @@ func getDatastores(ctx context.Context, e *Endpoint, filter *ResourceFilter) (ob
 			dsCapacity:   int32(r.Summary.Capacity / MEGABYTE),
 			dsFreeSpace:  int32(r.Summary.FreeSpace / MEGABYTE),
 			dsHosts:      hosts,
-			//dsHosts:
-			//dsSummery:    r.Summary,
 		}
 	}
 	return m, nil
@@ -1381,13 +1415,14 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 		}
 	} else if resourceType == "host" {
 		buckets := make(map[string]metricEntry)
+		ts := latestSample
 		for _, m := range res.customMetrics {
 			if m.Name == "disk.used.capacity" {
 				resDs, _ := e.resourceKinds["datastore"]
 				//e.log.Debugf("DataStore [%s]", tmp.objects["datastore-1029"])
 				for k, v := range res.objects {
 					mn, _ := e.makeMetricIdentifier(prefix, m.Name)
-					ts := latestSample
+
 					for _, dsName := range v.datasources {
 						//e.log.Debugf("aaaa [%s] [%s] [%s] [%s]", resDs.objects[dsName].altID, mn, k, v)
 						moid := k
@@ -1396,21 +1431,15 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 							"source":  v.name,
 							"moid":    moid,
 						}
-
 						tmpMS := performance.MetricSeries{
-							Name: m.Name,
-							//Instance: resDs.objects[dsName].altID,
+							Name:     m.Name,
 							Instance: dsName,
 						}
-						//
-						////tmpMS.Instance = info.DiskPath
 						e.populateTags(v, resourceType, res, t, &tmpMS)
 
 						bKey := mn + " " + dsName + " " + strconv.FormatInt(ts.UnixNano(), 10)
 						bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
-						////bucket.tags["disk"] = info.DiskPath
-						////bucket.fields["DiskPath"] = info.DiskPath
-						////bucket.fields["filesystem"] = info.DiskPath
+
 						if resDs.objects[dsName] != nil {
 							bucket.fields["capacity_mb"] = resDs.objects[dsName].dsCapacity
 							bucket.fields["free_mb"] = resDs.objects[dsName].dsFreeSpace
@@ -1420,11 +1449,74 @@ func (e *Endpoint) collectChunk(ctx context.Context, pqs queryChunk, res *resour
 				}
 			}
 		}
+
+		// Proc Cluster Custom Metric
+		resCluster, _ := e.resourceKinds["cluster"]
+		resDs, _ := e.resourceKinds["datastore"]
+		//resHost, _ := e.resourceKinds["host"]
+		for _, m := range resCluster.customMetrics {
+			if m.Name == "instance.used.summary" {
+
+				for clusterId, clusterValue := range resCluster.objects {
+					tmpMS := performance.MetricSeries{
+						Name:     m.Name,
+						Instance: "",
+					}
+
+					t := map[string]string{
+						"vcenter": e.URL.Host,
+						"source":  clusterValue.name,
+						"moid":    clusterValue.ref.Value,
+					}
+
+					e.populateTags(clusterValue, resCluster.name, resCluster, t, &tmpMS)
+
+					usedMemoryMB := int32(0)
+					usedCpuMhz := int32(0)
+					storageSize := int32(0)
+					freeStorageSize := int32(0)
+
+					// List Host....
+					// Operation usedMemory, usedCPU
+					for _, hostValue := range res.objects {
+						if clusterId == hostValue.parentRef.Value {
+							usedMemoryMB += hostValue.usedMemoryMB
+							usedCpuMhz += hostValue.usedCpuMhz
+						}
+					}
+
+					for _, clusterDs := range clusterValue.datasources {
+						for dsKey, dsValue := range resDs.objects {
+							if clusterDs == dsKey {
+								storageSize += dsValue.dsCapacity
+								freeStorageSize += dsValue.dsFreeSpace
+							}
+						}
+					}
+					e.log.Debugf("usedMemory %d, %d", usedMemoryMB, usedCpuMhz)
+					e.log.Debugf("Storage %d, free %d", storageSize, freeStorageSize)
+
+					clusterPrefix := "vsphere" + e.Parent.Separator + resCluster.name
+					mn, _ := e.makeMetricIdentifier(clusterPrefix, m.Name)
+					bKey := mn + " " + clusterValue.ref.Value + " " + strconv.FormatInt(ts.UnixNano(), 10)
+					bucket := metricEntry{name: mn, ts: ts, fields: make(map[string]interface{}), tags: t}
+					bucket.fields["total_cpu_mhz"] = clusterValue.cpuMhz
+					bucket.fields["used_cpu_mhz"] = usedCpuMhz
+					bucket.fields["total_memory_mb"] = clusterValue.memoryMB
+					bucket.fields["used_memory_mb"] = usedMemoryMB
+					bucket.fields["host_count"] = clusterValue.hostCount
+					bucket.fields["vm_count"] = clusterValue.vmCount
+					bucket.fields["storage_capacity_mb"] = storageSize
+					bucket.fields["storage_free_mb"] = freeStorageSize
+					buckets[bKey] = bucket
+				}
+			}
+		}
+
 		for _, bucket := range buckets {
 			acc.AddFields(bucket.name, bucket.fields, bucket.tags, bucket.ts)
 		}
 	}
-
 	return count, latestSample, nil
 }
 
@@ -1439,7 +1531,7 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 	}
 
 	if resourceType == "vm" || resourceType == "host" {
-		t["memory_size_mb"] = fmt.Sprintf("%d", objectRef.memorySizeMB)
+		t["memory_size_mb"] = fmt.Sprintf("%d", objectRef.memoryMB)
 	}
 
 	//if resourceType == "vm" && objectRef.vmSummary.Config.Name != "" {
