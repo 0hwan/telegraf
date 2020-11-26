@@ -805,10 +805,14 @@ func getHosts(ctx context.Context, e *Endpoint, filter *ResourceFilter) (objectM
 			}
 		}
 		for _, pnic := range r.Config.Network.Pnic {
-			if pnic.Mac == tmpHostNicInfo.mac {
+			if pnic.WakeOnLanSupported {
 				tmpHostNicInfo.pnicName = pnic.Device
 				break
 			}
+			//if pnic.Mac == tmpHostNicInfo.mac {
+			//	tmpHostNicInfo.pnicName = pnic.Device
+			//	break
+			//}
 		}
 
 		// r.Config.ScsiLun
@@ -1607,7 +1611,7 @@ func (e *Endpoint) populateTags(objectRef *objectRef, resourceType string, resou
 		if resourceType == "vm" && objectRef.lookup != nil && objectRef.guestNicInfo != nil {
 			//e.log.Debugf("... %d", len(objectRef.guestNicInfo))
 			for _, nicInfo := range objectRef.guestNicInfo {
-				if fmt.Sprint(nicInfo.DeviceConfigId) == v.Instance {
+				if fmt.Sprint(nicInfo.DeviceConfigId) == v.Instance && nicInfo.IpConfig != nil {
 					for _, ipInfo := range nicInfo.IpConfig.IpAddress {
 						if isIPv4.MatchString(ipInfo.IpAddress) && ipInfo.State == "preferred" {
 							t["mac_address"] = nicInfo.MacAddress
